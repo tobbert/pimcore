@@ -16,6 +16,7 @@ namespace Pimcore\Bundle\AdminBundle\Controller\Admin;
 
 use Pimcore\Controller\Configuration\TemplatePhp;
 use Pimcore\Controller\EventedControllerInterface;
+use Pimcore\Db;
 use Pimcore\Event\AdminEvents;
 use Pimcore\Logger;
 use Pimcore\Model;
@@ -1654,12 +1655,12 @@ class DataObjectController extends ElementControllerBase implements EventedContr
 
                                     $keyConfig = DataObject\Classificationstore\KeyConfig::getById($keyid);
                                     if ($keyConfig) {
-                                        $fieldDefintion = $keyDef = DataObject\Classificationstore\Service::getFieldDefinitionFromJson(
+                                        $fieldDefinition = $keyDef = DataObject\Classificationstore\Service::getFieldDefinitionFromJson(
                                             json_decode($keyConfig->getDefinition()),
                                             $keyConfig->getType()
                                         );
-                                        if ($fieldDefintion && method_exists($fieldDefintion, 'getDataFromGridEditor')) {
-                                            $value = $fieldDefintion->getDataFromGridEditor($value, $object, []);
+                                        if ($fieldDefinition && method_exists($fieldDefinition, 'getDataFromGridEditor')) {
+                                            $value = $fieldDefinition->getDataFromGridEditor($value, $object, []);
                                         }
                                     }
 
@@ -1668,6 +1669,12 @@ class DataObjectController extends ElementControllerBase implements EventedContr
                             }
                         } elseif (count($parts) > 1) {
                             $brickType = $parts[0];
+
+                            if (strpos($brickType, "?") !== false) {
+                                $brickDescriptor = substr($brickType, 1);
+                                $brickDescriptor = json_decode($brickDescriptor, true);
+                                $brickType = $brickDescriptor["containerKey"];
+                            }
                             $brickKey = $parts[1];
                             $brickField = DataObject\Service::getFieldForBrickType($object->getClass(), $brickType);
 
@@ -1683,13 +1690,26 @@ class DataObjectController extends ElementControllerBase implements EventedContr
                                 $object->$fieldGetter()->$brickSetter($brick);
                             }
 
-                            $fieldDefintion = $this->getFieldDefinitionFromBrick($brickType, $brickKey);
+                            if ($brickDescriptor) {
+                                $brickDefinition = Model\DataObject\Objectbrick\Definition::getByKey($brickType);
+                                $fieldDefinitionLocalizedFields = $brickDefinition->getFieldDefinition("localizedfields");
+                                $fieldDefinition = $fieldDefinitionLocalizedFields->getFieldDefinition($brickKey);
 
-                            if ($fieldDefintion && method_exists($fieldDefintion, 'getDataFromGridEditor')) {
-                                $value = $fieldDefintion->getDataFromGridEditor($value, $object, []);
+                            } else {
+                                $fieldDefinition = $this->getFieldDefinitionFromBrick($brickType, $brickKey);
                             }
 
-                            $brick->$valueSetter($value);
+                            if ($fieldDefinition && method_exists($fieldDefinition, 'getDataFromGridEditor')) {
+                                $value = $fieldDefinition->getDataFromGridEditor($value, $object, []);
+                            }
+
+                            if ($brickDescriptor) {
+                                /** @var  $localizedFields DataObject\Localizedfield */
+                                $localizedFields = $brick->getLocalizedfields();
+                                $localizedFields->setLocalizedValue($brickKey, $value);
+                            } else {
+                                $brick->$valueSetter($value);
+                            }
                         } else {
                             if (!$user->isAdmin() && $languagePermissions) {
                                 $fd = $class->getFieldDefinition($key);
@@ -1708,9 +1728,9 @@ class DataObjectController extends ElementControllerBase implements EventedContr
                                 }
                             }
 
-                            $fieldDefintion = $this->getFieldDefinition($class, $key);
-                            if ($fieldDefintion && method_exists($fieldDefintion, 'getDataFromGridEditor')) {
-                                $value = $fieldDefintion->getDataFromGridEditor($value, $object, []);
+                            $fieldDefinition = $this->getFieldDefinition($class, $key);
+                            if ($fieldDefinition && method_exists($fieldDefinition, 'getDataFromGridEditor')) {
+                                $value = $fieldDefinition->getDataFromGridEditor($value, $object, []);
                             }
 
                             $objectData[$key] = $value;
@@ -1757,7 +1777,16 @@ class DataObjectController extends ElementControllerBase implements EventedContr
                     if (substr($f, 0, 1) == '~') {
                         $type = $parts[1];
                     } elseif (count($parts) > 1) {
-                        $bricks[$parts[0]] = $parts[0];
+                        $brickType = $parts[0];
+
+                        if (strpos($brickType, "?") !== false) {
+                            $brickDescriptor = substr($brickType, 1);
+                            $brickDescriptor = json_decode($brickDescriptor, true);
+                            $brickType = $brickDescriptor["containerKey"];
+                            $bricks[$brickType] = $brickDescriptor;
+                        } else {
+                            $bricks[$parts[0]] = $brickType;
+                        }
                     }
                 }
             }
@@ -1788,9 +1817,20 @@ class DataObjectController extends ElementControllerBase implements EventedContr
                         $orderKey = 'concat(' . $orderKey . '__rgb, ' . $orderKey . '__a)';
                         $doNotQuote = true;
                     } elseif (strpos($orderKey, '~') !== false) {
+
                         $orderKeyParts = explode('~', $orderKey);
-                        if (count($orderKeyParts) == 2) {
-                            $orderKey = $orderKeyParts[1];
+
+                        if (strpos($orderKey, "?") !== false) {
+                            $brickDescriptor = substr($orderKeyParts[0], 1);
+                            $brickDescriptor = json_decode($brickDescriptor, true);
+                            $db = Db::get();
+                            $orderKey = $db->quoteIdentifier($brickDescriptor["containerKey"] . "_localized") . "." . $db->quoteIdentifier($brickDescriptor["brickfield"]);
+                            $doNotQuote = true;
+                        } else {
+
+                            if (count($orderKeyParts) == 2) {
+                                $orderKey = $orderKeyParts[1];
+                            }
                         }
                     }
                 }
@@ -1839,7 +1879,11 @@ class DataObjectController extends ElementControllerBase implements EventedContr
 
             if (!empty($bricks)) {
                 foreach ($bricks as $b) {
-                    $list->addObjectbrick($b);
+                    $brickType = $b;
+                    if (is_array($brickType)) {
+                        $brickType = $brickType["containerKey"];
+                    }
+                    $list->addObjectbrick($brickType);
                 }
             }
 

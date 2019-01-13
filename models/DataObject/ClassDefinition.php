@@ -273,16 +273,6 @@ class ClassDefinition extends Model\AbstractModel
     }
 
     /**
-     * @return bool
-     */
-    public function exists()
-    {
-        $name = $this->getDao()->getNameById($this->getId());
-
-        return is_string($name);
-    }
-
-    /**
      * @param bool $saveDefinitionFile
      *
      * @throws \Exception
@@ -295,8 +285,9 @@ class ClassDefinition extends Model\AbstractModel
             $this->setId($maxId ? $maxId + 1 : 1);
         }
 
-        $isUpdate = $this->exists();
+        $existingDefinition = ClassDefinition::getById($this->getId());
 
+        $isUpdate = !is_null($existingDefinition);
         if (!$isUpdate) {
             \Pimcore::getEventDispatcher()->dispatch(
                 DataObjectClassDefinitionEvents::PRE_ADD,
